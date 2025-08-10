@@ -1,4 +1,4 @@
--- Data Exploration & Cleaning
+-- Data Cleaning
 
 SELECT *
 FROM layoffs;
