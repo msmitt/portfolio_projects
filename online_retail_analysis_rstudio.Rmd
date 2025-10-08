@@ -1,0 +1,518 @@
+---
+title: "ECommerce Transaction Data Analysis"
+author: "Matthew A Smith"
+date: "2025-10-05"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    theme:
+      bootswatch: minty
+    toc: true
+    toc_float:
+      collapsed: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+```
+
+## Introduction
+
+I will be analyzing a transaction data set which contains all the transactions occurring between 01/12/2010 and 09/12/2011 for a UK-based and registered non-store online retail. The company mainly sells unique all-occasion gifts. Many customers of the company are wholesalers.
+
+### Dataset Source
+
+Chen, D. (2015). Online Retail [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5BW33.
+
+
+### Metadata
+
+- InvoiceNo: Invoice number.
+  - Nominal, a 6-digit integral number uniquely assigned to each transaction. If this code starts with letter 'c', it indicates a cancellation.
+  
+- StockCode: Product (item) code. 
+  - Nominal, a 5-digit integral number uniquely assigned to each distinct product.
+  
+- Description: Product (item) name.
+  - Nominal.
+  
+- Quantity: The quantities of each product (item) per transaction.
+  - Numeric.	
+  
+- InvoiceDate: Invoice Date and time.
+  - Numeric, the day and time when each transaction was generated.
+  
+- UnitPrice: Unit price.
+  - Numeric, Product price per unit in sterling.
+  
+- CustomerID: Customer number.
+  - Nominal, a 5-digit integral number uniquely assigned to each customer.
+  
+- Country: Country name.
+  - Nominal, the name of the country where each customer resides. 
+  
+
+
+## Setting up the environment
+
+```{r}
+if(!require(readxl)) install.packages('readxl')
+if(!require(car)) install.packages('car')
+if(!require(psych)) install.packages('psych')
+```
+
+
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(readr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(janitor))
+suppressPackageStartupMessages(library(car))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(psych))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(bslib))
+```
+
+
+### Import the dataset
+
+```{r}
+retail_raw <- read_excel("Online Retail.xlsx", sheet = 1)
+```
+
+## Data exploration
+
+```{r}
+head(retail_raw)
+summary(retail_raw)
+```
+## Cleaning: Issues
+
+1. The InvoiceDate column contains both the data in time in a YYYY-MM-DD 00:00:00 format. Separate columns will allow for deeper analysis. 
+
+### Cleaning: Process
+Load the data into a dataframe, naming it "df", then separate the columns.
+```{r}
+df <- retail_raw
+
+# Step One: Convert the InvoiceDate column to a datetime format
+df$InvoiceDate <- ymd_hms(df$InvoiceDate)
+
+# Step Two: Mutate() to create new columns for date and time
+df_clean <- df %>% 
+  mutate(
+    date_only = as.Date(InvoiceDate),
+    time_only = format(InvoiceDate, "%H:%M:%S")
+  )
+
+# Check the updated data frame
+head(df_clean)
+
+```
+
+
+## Transformation: Additions
+1. Returns are represented by a negative quantity. A new column could help identify returns.
+2. As is, the data set does not allow for easy analysis of international versus domestic orders. Creating a new column identifying orders as Domestic or International may be helpful.
+3. Add a revenue column to df_clean3.
+
+### Transformation: Process
+1. Utilize dplyr package to add a new column and if_else() statements to create a Return or Order designation.
+```{r}
+# Create the new 'transaction_type' column
+df_clean2 <- df_clean %>%
+  mutate(transaction_type = if_else(Quantity < 0, "Return", "Order"))
+
+# Check the new dataframe
+head(df_clean2)
+
+```
+
+2. Next, create a column using similar functions to identify domestic versus international orders.
+```{r}
+# Create the new 'shipping_type' column
+df_clean3 <- df_clean2 %>%
+  mutate(shipping_type = if_else(Country == "United Kingdom", "Domestic", "International"))
+
+# Check the new dataframe
+head(df_clean3)
+```
+
+3. Add a revenue column to the newest dataframe:
+```{r}
+# Using mutate() to create a new column called Revenue
+# by multiplying Quantity by UnitPrice, returns (which have negative Quantity)
+# will automatically result in negative Revenue.
+df_clean3_with_revenue <- df_clean3 %>%
+  mutate(Revenue = Quantity * UnitPrice)
+
+print("--- Data Frame after adding Revenue column (First 5 rows): ---")
+print(head(df_clean3_with_revenue, 5))
+
+```
+
+
+
+## Analysis: Stakeholder Requests
+Below is a series of requests stakeholders may ask of this e-commerce dataset. These questions may help the company better understand of business performance, identify trends, and spot potential issues. 
+
+1. What is the total sales revenue?
+
+2. Which products have been returned the most?
+
+3. How do domestic and international sales compare?
+
+4. What are the most returned products?
+
+5. What is the return rate, for odmestic and international orders?
+
+6. Which countries generate the most sales?
+
+7. How does sales revenue trend over time (e.g., by month)?
+
+8. What is the average order value (AOV)?
+
+
+## Analysis: Process
+
+#### 1. What is the total sales revenue?
+```{r}
+# Step One: Create a revenue column
+df_clean3 <- df_clean2 %>% 
+  mutate(Revenue = Quantity * UnitPrice)
+
+# Check the new dataframe
+head(df_clean3)
+view(df_clean3$Revenue)
+
+# Step Two: Calculate total sales revenue
+sum(df_clean3$Revenue)
+
+# Step Three: Name the total revenue as an object in the data frame
+total_revenue <- df_clean3 %>% 
+  summarise(TotalRevenue = round(sum(Revenue), 2))
+print("Total Sales Revenue:")
+print(total_revenue)
+
+```
+The total sales revenue for all transactions occurring between 01/12/2010 and 09/12/2011 is **£9,747,748.00**.
+
+
+#### 2. Which products have been returned the most?
+```{r}
+# Step One: Filter the dataset to include only returns (Quantity is negative)
+returns_df <- df_clean3 %>%
+  filter(Quantity < 0)
+
+print("Data frame filtered to show only returns:")
+print(head(returns_df))
+
+# Step Two: Calculate the total number of items returned for each product
+most_returned_products <- returns_df %>%
+  group_by(Description) %>%  # use a product identifier like 'StockCode' or 'Description'
+  summarise(TotalReturned = sum(abs(Quantity))) %>%
+  arrange(desc(TotalReturned))
+
+print("Top 10 most returned products:")
+print(head(most_returned_products, 10)) # 10 can be changed to any amount
+```
+
+Above is a list of the top 10 most commonly returned items. For example, the **"Little Birdie Paper Craft"** was the most frequently returned product with 80,995 returns. In second place is the **"Medium Ceramic Top Storage Jar"** with 74,494 returns.
+
+As you can see, the third most commonly returned item is marked with an "NA". The seventh item is listed as "?". This data cannot be inferred from the data set alone, and the amount of returns does not justify deleting this row. At this point I would present this data to stakeholders and attempt to obtain more information about the product descriptions.
+
+
+#### 3. How do domestic and international sales compare? 
+
+```{r}
+sales_by_shipping_type <- df_clean3_with_revenue %>%
+  # Group by shipping type
+  group_by(shipping_type) %>%
+  # Summarize total revenue for each type
+  summarise(TotalRevenue = sum(Revenue, na.rm = TRUE)) %>%
+  # Temporarily ungroup to calculate the grand total across all types
+  ungroup() %>%
+  # Calculate the percentage of total sales for each shipping type
+  mutate(
+    GrandTotalRevenue = sum(TotalRevenue), # Calculate grand total across the two rows
+    SalesPercentage = round((TotalRevenue / GrandTotalRevenue) * 100, 2) # Calculate percentage and round to 2 decimals
+  ) %>%
+  select(shipping_type, TotalRevenue, SalesPercentage) # Select and order the final columns
+
+print("--- Sales by Shipping Type (With Percentage Breakdown): ---")
+print(sales_by_shipping_type)
+
+```
+
+Domestic, or sales within the United Kingdom, account for **84%** of total revenue. International sales account for the remaining **16%** of total revenue between January 12, 2010 and September 12, 2011.
+
+
+#### 4. What is the return rate, for odmestic and international orders?
+
+```{r}
+# Create shipping type on returns dataframe
+returns_df <- df_clean3 %>%
+  mutate(shipping_type = if_else(Country == "United Kingdom", "Domestic", "International"))
+
+# Ensure df_clean3 has the shipping_type matrix
+df_clean3 <- df_clean2 %>%
+  mutate(shipping_type = if_else(Country == "United Kingdom", "Domestic", "International"))
+
+# Analyze returns by shipping type
+# Calculate the return rate percentage by shipping_type
+returns_by_shipping_type <- df_clean3 %>%
+  # Group the data by 'shipping_type' column
+  group_by(shipping_type) %>%
+  # Count the total number of orders/returns per shipping type
+  mutate(TotalTransactions = n()) %>%
+  # Filter to count only the returns
+  filter(transaction_type == "Return") %>%
+  # Count the number of returns per shipping type
+  summarise(
+    TotalReturns = n(),
+    TotalTransactions = first(TotalTransactions) # Grab the total count from the previous step
+  ) %>%
+  # Calculate the return rate
+  mutate(
+    ReturnRate = (TotalReturns / TotalTransactions) * 100
+  ) %>%
+  # Arrange for readability
+  arrange(desc(ReturnRate))
+
+print("Return Rate by Shipping Type:")
+print(returns_by_shipping_type)
+
+head(returns_by_shipping_type)
+
+```
+
+Products ordered internationally were returned at a rate of approximately **3.1%**. Domestic orders were returned at a lower rate of about **1.9%**.
+
+
+#### 5. Which countries have the highest rate of return?
+
+```{r}
+# Calculate the return rate percentage by Country
+returns_by_country <- df_clean3 %>%
+  # Group the data by the 'Country' column
+  group_by(Country) %>%
+  # Count the total number of orders/returns for each country
+  mutate(TotalTransactions = n()) %>%
+  # Filter to count only the returns
+  filter(transaction_type == "Return") %>%
+  # Only consider countries that actually have returns to simplify the output
+  summarise(
+    TotalReturns = n(),
+    TotalTransactions = first(TotalTransactions)
+  ) %>%
+  # Calculate the return rate
+  mutate(
+    ReturnRate = (TotalReturns / TotalTransactions) * 100
+  ) %>%
+  # Sort to see which countries have the highest return rate
+  arrange(desc(ReturnRate))
+
+print("Return Rate by Country (Highest First):")
+print(head(returns_by_country, 10))
+```
+
+The United States has the highest rate of return at 38.5%. Above you will see the descending list of countries with the highest return rate. This data has not been filtered to a specific minimum amount of transactions (as it was not requested), however that may be a useful change depending upon the business goals (analyzing shipping issues, budgeting, etc.)
+
+
+#### 6. Which countries are the top 10 by sales?
+
+```{r}
+# Find top-performing countries
+# Use na.rm = TRUE in sum() to safely handle any potential NA values
+sales_by_country <- df_clean3_with_revenue %>%
+  group_by(Country) %>%
+  summarise(TotalRevenue = sum(Revenue, na.rm = TRUE)) %>%
+  arrange(desc(TotalRevenue))
+
+print("--- Sales by Country (Top 10 Results): ---")
+print(head(sales_by_country, 10))
+
+print("Sales by Country (Top 10):")
+print(head(sales_by_country, 10))
+```
+
+Above is a list of the ten countries who generated the most revenue. Unsurprisingly, the United Kingdom leads with a large margin (domestic orders). The remaining top nine are all European countries except for Australia at sixth place with £137,077.27 worth of revenue over this period (01/12/2010 and 09/12/2011).
+
+
+#### 7. How does sales revenue trend over time (e.g., by month)?
+
+```{r}
+# Analyze sales trends by month
+monthly_sales <- df_clean3_with_revenue %>%
+  mutate(
+    year = year(date_only),
+    month = month(date_only, label = TRUE) # label = TRUE gives abbreviated month names
+  ) %>%
+  group_by(year, month) %>%
+  summarise(TotalRevenue = sum(Revenue)) %>%
+  arrange(year, month)
+
+print("Monthly Sales Trends:")
+print(monthly_sales)
+```
+
+A visualization is included later in this document which will represent the trend more clearly. Notably, there was a significant increase in revenue between September 2011 and November 2011.
+
+
+#### 8. What is the average order value (AOV)?
+
+```{r}
+# Calculate the average order value (AOV)
+# First, calculate total revenue per invoice
+invoice_revenue <- df_clean3_with_revenue %>%
+  group_by(InvoiceNo) %>%
+  summarise(InvoiceTotal = sum(Revenue))
+
+# Then, calculate the overall average
+average_order_value <- invoice_revenue %>%
+  summarise(AOV = mean(InvoiceTotal))
+
+print("Average Order Value:")
+print(average_order_value)
+```
+
+The average order value between 01/12/2010 and 09/12/2011 is **£376.36**.
+
+
+## Visualization: Stakeholder Requests
+Below are potential requests from stakeholders pertaining to visuals.
+
+
+#### 1. Create a plot visualizing the profits earned from UK customers weekly, monthly, and quarterly.
+
+```{r}
+# Filter the data to only include UK customers + ensure 'date_only' is a Date type.
+uk_sales <- df_clean3_with_revenue %>%
+  filter(Country == "United Kingdom") %>%
+  # Note:'Revenue' column is accounting for returns.
+
+  mutate(date_only = as.Date(date_only)) # Ensure date_only is in Date format for time series functions
+
+# Function to aggregate and plot time-series data
+plot_uk_sales <- function(data, period_function, period_label, plot_title) {
+  
+  # Aggregate data by time period (week, month, or quarter)
+  aggregated_data <- data %>%
+    mutate(Period = period_function(date_only)) %>% # Create the period column
+    group_by(Period) %>%
+    summarise(TotalProfit = sum(Revenue, na.rm = TRUE)) # Sum the revenue (profit)
+  
+  # 2. Create the line plot using ggplot()
+  uk_line_plot <- ggplot(aggregated_data, aes(x = Period, y = TotalProfit)) +
+    geom_line(color = "#00bfa5", linewidth = 1) + # Teal line for the trend
+    geom_point(color = "#00bfa5", size = 2) + # Points at each period
+    geom_smooth(method = "loess", se = FALSE, color = "#FFA500", linetype = "dashed") +
+    # Adding orange smooth trend line, dashing for visibility.
+    labs(
+      title = plot_title,
+      x = period_label,
+      y = "Total Profit (Revenue)",
+      caption = "Analysis of United Kingdom Sales"
+    ) +
+    scale_y_continuous(labels = scales::comma) + # Format y-axis for readability
+    theme_minimal() + # Use a clean theme
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1) # Rotate X-axis labels for readability
+    )
+  
+  print(uk_line_plot) # Display the plot
+}
+
+# --- Plotting Weekly Trends ---
+# Note: For weekly trends, we use 'floor_date' to group dates into the start of the week.
+plot_uk_sales(
+  data = uk_sales,
+  period_function = function(x) floor_date(x, unit = "week"), 
+  period_label = "Week Start Date",
+  plot_title = "Weekly Profit Trend for UK Customers"
+)
+
+# --- Plotting Monthly Trends ---
+# Note: For monthly trends, we use 'floor_date' to group dates into the start of the month.
+plot_uk_sales(
+  data = uk_sales,
+  period_function = function(x) floor_date(x, unit = "month"), 
+  period_label = "Month Start Date",
+  plot_title = "Monthly Profit Trend for UK Customers"
+)
+
+# --- Plotting Quarterly Trends ---
+# Note: For quarterly trends, we use 'floor_date' to group dates into the start of the quarter.
+plot_uk_sales(
+  data = uk_sales,
+  period_function = function(x) floor_date(x, unit = "quarter"),
+  period_label = "Quarter Start Date",
+  plot_title = "Quarterly Profit Trend for UK Customers"
+)
+```
+
+
+#### 2. Top ten products by revenue
+```{r}
+# 6.1: Top 10 Products by Revenue (Focusing on the "What")
+# Assuming 'Description' is the product name column
+top_products <- df_clean3_with_revenue %>%
+  filter(Revenue > 0) %>% # Only count actual sales
+  group_by(Description) %>%
+  summarise(TotalRevenue = sum(Revenue, na.rm = TRUE)) %>%
+  arrange(desc(TotalRevenue)) %>%
+  head(10) # Select the top 10 products
+
+# Create a bar chart for the top 10 products
+p_top_products <- ggplot(top_products, aes(x = reorder(Description, TotalRevenue), y = TotalRevenue)) +
+  geom_col(fill = "#00bfa5") + # Teal color for revenue
+  coord_flip() + # Flip coordinates to make product names readable
+  labs(
+    title = "Top 10 Products by Total Revenue",
+    x = "Product Description",
+    y = "Total Revenue",
+    caption = "Identifies key revenue drivers"
+  ) +
+  scale_y_continuous(labels = scales::comma) + # Format y-axis for readability
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print("--- Top 10 Products by Revenue Plot: ---")
+print(p_top_products)
+```
+
+
+#### 3. Which days do we make the most sales?
+```{r}
+sales_by_day <- df_clean3_with_revenue %>%
+  # Ensure we only look at successful sales
+  filter(Revenue > 0) %>% 
+  # Use wday() to extract the day of the week, label=TRUE to get names, and abbr=FALSE for full names
+  mutate(DayOfWeek = wday(date_only, label = TRUE, abbr = FALSE)) %>%
+  group_by(DayOfWeek) %>%
+  summarise(TotalRevenue = sum(Revenue, na.rm = TRUE))
+
+# Create a bar chart for sales by day of the week
+p_sales_by_day <- ggplot(sales_by_day, aes(x = DayOfWeek, y = TotalRevenue)) +
+  geom_col(fill = "#00bfa5") + # Teal color
+  labs(
+    title = "Total Revenue by Day of the Week",
+    x = "Day of Week",
+    y = "Total Revenue",
+    caption = "Identifies peak sales days for staffing/marketing/etc"
+  ) +
+  scale_y_continuous(labels = scales::comma) + # Format y-axis for readability
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print("--- Revenue by Day of the Week Plot: ---")
+print(p_sales_by_day)
+```
+
+
+
